@@ -39,6 +39,14 @@ type ReviewListStoreParams struct {
 	PageSize int32
 }
 
+// PublicReviewListParams is for consumer-facing review feeds.
+type PublicReviewListParams struct {
+	StoreID  int64
+	SpuID    int64
+	Page     int32
+	PageSize int32
+}
+
 // ReviewListPendingParams 运营端待审核分页列表
 type ReviewListPendingParams struct {
 	Page     int32

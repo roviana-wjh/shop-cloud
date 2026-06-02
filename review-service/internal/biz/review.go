@@ -28,6 +28,8 @@ type ReviewRepo interface {
 	ListByOrderID(ctx context.Context, p *ReviewListOrderParams) ([]*model.ReviewInfo, int64, error)
 	ListByUseId(ctx context.Context, p *ReviewListUserParams) ([]*model.ReviewInfo, int64, error)
 	ListByStoreId(ctx context.Context, p *ReviewListStoreParams) ([]*model.ReviewInfo, int64, error)
+	ListPublicByStoreId(ctx context.Context, p *PublicReviewListParams) ([]*model.ReviewInfo, int64, error)
+	ListPublicBySpuId(ctx context.Context, p *PublicReviewListParams) ([]*model.ReviewInfo, int64, error)
 	ListGoodsScoreRank(ctx context.Context, p *GoodsScoreRankParams) ([]*GoodsScoreRankItem, int64, error)
 	ListPending(ctx context.Context, p *ReviewListPendingParams) ([]*model.ReviewInfo, int64, error)
 	ListPendingAppeals(ctx context.Context, p *AppealListPendingParams) ([]*model.ReviewAppealInfo, int64, error)
@@ -241,6 +243,16 @@ func (uc *ReviewUsecase) ListReviewByUseId(ctx context.Context, p *ReviewListUse
 func (uc *ReviewUsecase) ListReviewByStoreId(ctx context.Context, p *ReviewListStoreParams) ([]*model.ReviewInfo, int64, error) {
 	uc.log.WithContext(ctx).Debugf("[biz] list review by store: %+v", p)
 	return uc.repo.ListByStoreId(ctx, p)
+}
+
+func (uc *ReviewUsecase) ListPublicReviewsByStoreId(ctx context.Context, p *PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	uc.log.WithContext(ctx).Debugf("[biz] list public reviews by store: %+v", p)
+	return uc.repo.ListPublicByStoreId(ctx, p)
+}
+
+func (uc *ReviewUsecase) ListPublicReviewsBySpuId(ctx context.Context, p *PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	uc.log.WithContext(ctx).Debugf("[biz] list public reviews by spu: %+v", p)
+	return uc.repo.ListPublicBySpuId(ctx, p)
 }
 
 func (uc *ReviewUsecase) ListPendingReviews(ctx context.Context, p *ReviewListPendingParams) ([]*model.ReviewInfo, int64, error) {

@@ -66,6 +66,22 @@ export function listReviewByStore(storeID: number, params: PaginationParams) {
   })
 }
 
+export function listPublicReviewsByStore(storeID: number, params: PaginationParams) {
+  return request<ListReply<ReviewListItem>>('review', {
+    method: 'GET',
+    url: `/v1/review/public/store/${storeID}`,
+    params,
+  })
+}
+
+export function listPublicReviewsByGoods(spuID: number, params: PaginationParams) {
+  return request<ListReply<ReviewListItem>>('review', {
+    method: 'GET',
+    url: `/v1/review/public/goods/${spuID}`,
+    params,
+  })
+}
+
 export function listGoodsScoreRank(params: PaginationParams) {
   return request<ListReply<GoodsScoreRankItem>>('review', {
     method: 'GET',

@@ -34,6 +34,7 @@ func NewHTTPServer(c *conf.Server, reviewer *service.ReviewService, logger log.L
 	srv := http.NewServer(opts...)
 	registerUploadRoutes(srv, logger)
 	registerRankRoutes(srv, reviewer, logger)
+	registerPublicReviewRoutes(srv, reviewer, logger)
 	v1.RegisterReviewHTTPServer(srv, reviewer)
 	return srv
 }

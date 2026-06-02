@@ -7,6 +7,8 @@ import {
   createReview,
   deleteReview,
   getReview,
+  listPublicReviewsByGoods,
+  listPublicReviewsByStore,
   listReviewByOrder,
   listReviewByUser,
   updateReview,
@@ -43,12 +45,15 @@ const editForm = reactive<UpdateReviewPayload>({
 const detailReviewID = ref(0)
 const userQuery = reactive({ userID: 10001, page: 1, pageSize: 10 })
 const orderQuery = reactive({ orderID: 20001, page: 1, pageSize: 10 })
+const publicQuery = reactive({ mode: 'store' as 'store' | 'goods', storeID: 30001, spuID: 10001, page: 1, pageSize: 10 })
 
 const userList = ref<ReviewListItem[]>([])
 const orderList = ref<ReviewListItem[]>([])
+const publicList = ref<ReviewListItem[]>([])
 const detail = ref<ReviewListItem | null>(null)
 const userTotal = ref(0)
 const orderTotal = ref(0)
+const publicTotal = ref(0)
 const loading = ref(false)
 
 const showcaseProduct = computed(() => ({
@@ -135,6 +140,25 @@ async function handleLoadOrderReviews() {
     })
     orderList.value = result.list ?? []
     orderTotal.value = result.total ?? 0
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleLoadPublicReviews() {
+  loading.value = true
+  try {
+    const params = {
+      page: publicQuery.page,
+      pageSize: publicQuery.pageSize,
+    }
+    const result = publicQuery.mode === 'store'
+      ? await listPublicReviewsByStore(publicQuery.storeID, params)
+      : await listPublicReviewsByGoods(publicQuery.spuID, params)
+    publicList.value = result.list ?? []
+    publicTotal.value = result.total ?? 0
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
@@ -265,6 +289,53 @@ function statusLabel(status: number) {
           <span class="hint">{{ item.hint }}</span>
         </div>
       </div>
+
+      <el-card class="commerce-card table-card" shadow="never">
+        <div class="section-header">
+          <div>
+            <h3 class="section-title">公开评论列表</h3>
+            <p class="section-subtitle">面向商品详情页和店铺页，只展示审核通过的评论</p>
+          </div>
+          <el-tag type="success" round>高流量读取</el-tag>
+        </div>
+        <div class="table-toolbar">
+          <el-radio-group v-model="publicQuery.mode">
+            <el-radio-button value="store">店铺</el-radio-button>
+            <el-radio-button value="goods">商品</el-radio-button>
+          </el-radio-group>
+          <el-input-number v-if="publicQuery.mode === 'store'" v-model="publicQuery.storeID" :min="1" />
+          <el-input-number v-else v-model="publicQuery.spuID" :min="1" />
+          <el-input-number v-model="publicQuery.page" :min="1" />
+          <el-input-number v-model="publicQuery.pageSize" :min="1" :max="100" />
+          <el-button type="primary" :loading="loading" @click="handleLoadPublicReviews">加载公开评论</el-button>
+        </div>
+        <div v-if="publicList.length" class="review-card-list">
+          <article v-for="row in publicList" :key="row.reviewID" class="review-card">
+            <div class="placeholder-image review-thumb">
+              <span>晒单图</span>
+            </div>
+            <div>
+              <div class="review-card-header">
+                <div>
+                  <p class="review-card-title">公开评论 #{{ row.reviewID }}</p>
+                  <p class="review-card-meta">{{ formatTime(row.createAt) }}</p>
+                </div>
+                <el-tag type="success" round>已通过</el-tag>
+              </div>
+              <el-rate :model-value="row.score" disabled />
+              <p class="review-card-content">{{ row.content || '暂无文字内容' }}</p>
+              <div class="review-card-tags">
+                <span>用户 {{ row.userID }}</span>
+                <span>订单 {{ row.orderID }}</span>
+                <span>服务 {{ row.serviceScore }}</span>
+                <span>物流 {{ row.expressScore }}</span>
+              </div>
+            </div>
+          </article>
+        </div>
+        <el-empty v-else description="暂无公开评论，审核通过后会出现在这里" />
+        <div class="table-footer">共 {{ publicTotal }} 条</div>
+      </el-card>
 
       <div class="panel-grid">
         <el-card class="commerce-card" shadow="never">

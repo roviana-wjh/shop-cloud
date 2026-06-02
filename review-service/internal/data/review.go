@@ -12,6 +12,7 @@ import (
 	"review-service/internal/biz"
 	"review-service/internal/data/model"
 	"review-service/internal/data/query"
+	"review-service/pkg/localcache"
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types/enums/sortorder"
@@ -36,8 +37,9 @@ type goodsScoreRankMeta struct {
 }
 
 type ReviewRepo struct {
-	data *Data
-	log  *log.Helper
+	data  *Data
+	log   *log.Helper
+	local *localcache.Cache
 }
 
 const (
@@ -45,12 +47,15 @@ const (
 	goodsScoreRankMetaKey  = "review:v1:rank:goods:score:meta"
 	cacheDoubleDeleteDelay = 300 * time.Millisecond
 	cacheDeleteTimeout     = 3 * time.Second
+	// localCacheBackfillTTL Redis 命中后写入本地缓存的 TTL（短于 Redis，降低多实例间短暂不一致窗口）
+	localCacheBackfillTTL = 2 * time.Minute
 )
 
 func NewReviewRepo(data *Data, logger log.Logger) biz.ReviewRepo {
 	return &ReviewRepo{
-		data: data,
-		log:  log.NewHelper(logger),
+		data:  data,
+		log:   log.NewHelper(logger),
+		local: localcache.New(),
 	}
 }
 
@@ -60,6 +65,9 @@ func (r *ReviewRepo) SaveReview(ctx context.Context, review *model.ReviewInfo) (
 	}
 	if err := r.invalidateStoreReviewCache(ctx, review.StoreID); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] 创建评价后清理店铺缓存失败 store_id=%d: %v", review.StoreID, err)
+	}
+	if err := r.invalidatePublicReviewCache(ctx, review); err != nil {
+		r.log.WithContext(ctx).Warnf("[data] invalidate public review cache after create failed review_id=%d: %v", review.ReviewID, err)
 	}
 	if err := r.invalidateGoodsScoreRankCache(ctx); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] 创建评价后清理商品评分榜缓存失败: %v", err)
@@ -200,12 +208,41 @@ func (r *ReviewRepo) listByStoreIdFromDB(ctx context.Context, p *biz.ReviewListS
 	return list, total, nil
 }
 
+func (r *ReviewRepo) listPublicByStoreIdFromDB(ctx context.Context, p *biz.PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	q := r.data.q.ReviewInfo.WithContext(ctx).Where(
+		r.data.q.ReviewInfo.StoreID.Eq(p.StoreID),
+		r.data.q.ReviewInfo.Status.Eq(biz.ReviewStatusApproved),
+	)
+	offset := int((p.Page - 1) * p.PageSize)
+	list, total, err := q.Order(r.data.q.ReviewInfo.CreateAt.Desc()).FindByPage(offset, int(p.PageSize))
+	if err != nil {
+		return nil, 0, wrapReviewDB("query public store reviews", err)
+	}
+	return list, total, nil
+}
+
+func (r *ReviewRepo) listPublicBySpuIdFromDB(ctx context.Context, p *biz.PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	q := r.data.q.ReviewInfo.WithContext(ctx).Where(
+		r.data.q.ReviewInfo.SpuID.Eq(p.SpuID),
+		r.data.q.ReviewInfo.Status.Eq(biz.ReviewStatusApproved),
+	)
+	offset := int((p.Page - 1) * p.PageSize)
+	list, total, err := q.Order(r.data.q.ReviewInfo.CreateAt.Desc()).FindByPage(offset, int(p.PageSize))
+	if err != nil {
+		return nil, 0, wrapReviewDB("query public goods reviews", err)
+	}
+	return list, total, nil
+}
+
 func (r *ReviewRepo) UpdateReview(ctx context.Context, row *model.ReviewInfo) error {
 	if err := r.data.q.ReviewInfo.WithContext(ctx).Save(row); err != nil {
 		return wrapReviewDB("更新评价", err)
 	}
 	if err := r.invalidateStoreReviewCache(ctx, row.StoreID); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] 更新评价后清理店铺缓存失败 store_id=%d: %v", row.StoreID, err)
+	}
+	if err := r.invalidatePublicReviewCache(ctx, row); err != nil {
+		r.log.WithContext(ctx).Warnf("[data] invalidate public review cache after update failed review_id=%d: %v", row.ReviewID, err)
 	}
 	if err := r.invalidateGoodsScoreRankCache(ctx); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] 更新评价后清理商品评分榜缓存失败: %v", err)
@@ -223,6 +260,9 @@ func (r *ReviewRepo) DeleteByReviewID(ctx context.Context, reviewID int64) error
 	}
 	if err := r.invalidateStoreReviewCache(ctx, info.StoreID); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] 删除评价后清理店铺缓存失败 store_id=%d: %v", info.StoreID, err)
+	}
+	if err := r.invalidatePublicReviewCache(ctx, info); err != nil {
+		r.log.WithContext(ctx).Warnf("[data] invalidate public review cache after delete failed review_id=%d: %v", info.ReviewID, err)
 	}
 	if err := r.invalidateGoodsScoreRankCache(ctx); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] 删除评价后清理商品评分榜缓存失败: %v", err)
@@ -259,6 +299,9 @@ func (r *ReviewRepo) SaveReply(ctx context.Context, reply *model.ReviewReplyInfo
 	}
 	if err := r.invalidateStoreReviewCache(ctx, review.StoreID); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] 商家回复后清理店铺缓存失败 store_id=%d: %v", review.StoreID, err)
+	}
+	if err := r.invalidatePublicReviewCache(ctx, review); err != nil {
+		r.log.WithContext(ctx).Warnf("[data] invalidate public review cache after reply failed review_id=%d: %v", review.ReviewID, err)
 	}
 	return reply, nil
 }
@@ -321,6 +364,60 @@ func (r *ReviewRepo) UpdateAppeal(ctx context.Context, row *model.ReviewAppealIn
 }
 func (r *ReviewRepo) ListByStoreId(ctx context.Context, p *biz.ReviewListStoreParams) ([]*model.ReviewInfo, int64, error) {
 	return r.getData2(ctx, p)
+}
+
+func (r *ReviewRepo) ListPublicByStoreId(ctx context.Context, p *biz.PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	return r.listPublicReviews(ctx, "store", p.StoreID, p)
+}
+
+func (r *ReviewRepo) ListPublicBySpuId(ctx context.Context, p *biz.PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	return r.listPublicReviews(ctx, "spu", p.SpuID, p)
+}
+
+func (r *ReviewRepo) listPublicReviews(ctx context.Context, dimension string, id int64, p *biz.PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	if p.Page < 1 {
+		p.Page = 1
+	}
+	if p.PageSize < 1 {
+		p.PageSize = 10
+	}
+	from := int((p.Page - 1) * p.PageSize)
+	size := int(p.PageSize)
+	key := fmt.Sprintf("review:v1:public:%s:%d:offset:%d:limit:%d", dimension, id, from, size)
+	if r.data.rdb == nil {
+		return r.publicReviewsFromES(ctx, dimension, id, p)
+	}
+	raw, err := r.getDataBySingleflightForPublic(ctx, key, dimension, id, p)
+	if err != nil {
+		return nil, 0, err
+	}
+	var c storeReviewListCache
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, 0, fmt.Errorf("decode public review cache: %w", err)
+	}
+	if c.Total == 0 && len(c.Reviews) == 0 && !c.EmptyDBChecked {
+		dbList, dbTotal, err := r.listPublicReviewsFromDB(ctx, dimension, p)
+		if err != nil {
+			return nil, 0, err
+		}
+		if dbTotal > 0 {
+			b, mErr := json.Marshal(&storeReviewListCache{Total: dbTotal, Reviews: dbList})
+			if mErr == nil {
+				if err := r.setCache(ctx, key, b, 10*time.Minute); err != nil {
+					r.log.WithContext(ctx).Warnf("[data] backfill public review cache: %v", err)
+				}
+			}
+			return dbList, dbTotal, nil
+		}
+	}
+	return c.Reviews, c.Total, nil
+}
+
+func (r *ReviewRepo) listPublicReviewsFromDB(ctx context.Context, dimension string, p *biz.PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	if dimension == "spu" {
+		return r.listPublicBySpuIdFromDB(ctx, p)
+	}
+	return r.listPublicByStoreIdFromDB(ctx, p)
 }
 
 func (r *ReviewRepo) getData2(ctx context.Context, p *biz.ReviewListStoreParams) ([]*model.ReviewInfo, int64, error) {
@@ -428,6 +525,86 @@ func (r *ReviewRepo) storeReviewsFromES(ctx context.Context, p *biz.ReviewListSt
 			r.log.WithContext(ctx).Infof("[data] ListByStoreId: ES 无命中但 MySQL 有 %d 条，已回退数据库 store_id=%d", dbTotal, p.StoreID)
 			return dbList, dbTotal, nil
 		}
+	}
+	return out, total, nil
+}
+
+func (r *ReviewRepo) publicReviewsFromES(ctx context.Context, dimension string, id int64, p *biz.PublicReviewListParams) ([]*model.ReviewInfo, int64, error) {
+	if r.data.es == nil {
+		return r.listPublicReviewsFromDB(ctx, dimension, p)
+	}
+	from := int((p.Page - 1) * p.PageSize)
+	size := int(p.PageSize)
+	desc := sortorder.Desc
+	field := "store_id"
+	if dimension == "spu" {
+		field = "spu_id"
+	}
+	sortOpts := types.SortOptions{
+		SortOptions: map[string]types.FieldSort{
+			"create_at.keyword": {Order: &desc},
+		},
+	}
+	resp, err := r.data.es.Search().
+		Index("review").
+		From(from).
+		Size(size).
+		TrackTotalHits(true).
+		Sort(sortOpts).
+		Query(&types.Query{
+			Bool: &types.BoolQuery{
+				Filter: []types.Query{
+					{
+						Bool: &types.BoolQuery{
+							Should: []types.Query{
+								{Term: map[string]types.TermQuery{
+									field: {Value: id},
+								}},
+								{Term: map[string]types.TermQuery{
+									field + ".keyword": {Value: strconv.FormatInt(id, 10)},
+								}},
+							},
+							MinimumShouldMatch: 1,
+						},
+					},
+					{
+						Bool: &types.BoolQuery{
+							Should: []types.Query{
+								{Term: map[string]types.TermQuery{
+									"status": {Value: biz.ReviewStatusApproved},
+								}},
+								{Term: map[string]types.TermQuery{
+									"status.keyword": {Value: strconv.FormatInt(int64(biz.ReviewStatusApproved), 10)},
+								}},
+							},
+							MinimumShouldMatch: 1,
+						},
+					},
+				},
+			},
+		}).
+		Do(ctx)
+	if err != nil {
+		r.log.WithContext(ctx).Warnf("[data] public reviews ES failed dimension=%s id=%d: %v", dimension, id, err)
+		return r.listPublicReviewsFromDB(ctx, dimension, p)
+	}
+	var total int64
+	if resp.Hits.Total != nil {
+		total = resp.Hits.Total.Value
+	}
+	out := make([]*model.ReviewInfo, 0, len(resp.Hits.Hits))
+	for i := range resp.Hits.Hits {
+		row, err := reviewInfoFromESSource(resp.Hits.Hits[i].Source_)
+		if err != nil {
+			r.log.WithContext(ctx).Warnf("skip public review ES document: %v", err)
+			continue
+		}
+		if row.Status == biz.ReviewStatusApproved {
+			out = append(out, row)
+		}
+	}
+	if total == 0 {
+		return r.listPublicReviewsFromDB(ctx, dimension, p)
 	}
 	return out, total, nil
 }
@@ -662,20 +839,90 @@ func (r *ReviewRepo) getDataBySingleflight(ctx context.Context, key string, p *b
 	return v.([]byte), nil
 }
 
-// 读缓存
-func (r *ReviewRepo) getDataFromCahe(ctx context.Context, key string) (any, error) {
-	r.log.WithContext(ctx).Debugf("[data] getDataFromCahe: key=%s", key)
-	return r.data.rdb.Get(ctx, key).Bytes()
+// 读缓存：L1 本地 map → L2 Redis
+func (r *ReviewRepo) getDataBySingleflightForPublic(ctx context.Context, key string, dimension string, id int64, p *biz.PublicReviewListParams) ([]byte, error) {
+	v, err, shared := g.Do(key, func() (any, error) {
+		data, err := r.getDataFromCahe(ctx, key)
+		if err == nil {
+			return data, nil
+		}
+		if errors.Is(err, redis.Nil) {
+			reviews, total, err := r.publicReviewsFromES(ctx, dimension, id, p)
+			if err != nil {
+				return nil, err
+			}
+			c := storeReviewListCache{
+				Total:          total,
+				Reviews:        reviews,
+				EmptyDBChecked: total == 0 && len(reviews) == 0,
+			}
+			raw, err := json.Marshal(&c)
+			if err != nil {
+				return nil, err
+			}
+			if err := r.setCache(ctx, key, raw, 10*time.Minute); err != nil {
+				r.log.WithContext(ctx).Warnf("[data] set public review cache: %v", err)
+			}
+			return raw, nil
+		}
+		return nil, err
+	})
+	r.log.WithContext(ctx).Debugf("[data] getDataBySingleflightForPublic: key=%s shared=%v err=%v", key, shared, err)
+	if err != nil {
+		return nil, err
+	}
+	return v.([]byte), nil
 }
 
-// 写缓存
+func (r *ReviewRepo) getDataFromCahe(ctx context.Context, key string) (any, error) {
+	if r.local != nil {
+		if b, ok := r.local.Get(key); ok {
+			r.log.WithContext(ctx).Debugf("[data] getDataFromCahe: local hit key=%s", key)
+			return b, nil
+		}
+	}
+	if r.data.rdb == nil {
+		return nil, redis.Nil
+	}
+	b, err := r.data.rdb.Get(ctx, key).Bytes()
+	if err == nil && r.local != nil {
+		r.local.Set(key, b, localCacheBackfillTTL)
+		r.log.WithContext(ctx).Debugf("[data] getDataFromCahe: redis hit, backfill local key=%s", key)
+	}
+	return b, err
+}
+
+// 写缓存：同时写本地与 Redis
 func (r *ReviewRepo) setCache(ctx context.Context, key string, data any, ttl time.Duration) error {
-	r.log.WithContext(ctx).Debugf("[data] setCache: key=%s data=%v ttl=%s", key, data, ttl)
+	r.log.WithContext(ctx).Debugf("[data] setCache: key=%s ttl=%s", key, ttl)
+	if raw, ok := cacheBytes(data); ok && r.local != nil {
+		r.local.Set(key, raw, ttl)
+	}
+	if r.data.rdb == nil {
+		return nil
+	}
 	return r.data.rdb.Set(ctx, key, data, ttl).Err()
 }
 
+func cacheBytes(data any) ([]byte, bool) {
+	switch v := data.(type) {
+	case []byte:
+		return v, true
+	case string:
+		return []byte(v), true
+	default:
+		return nil, false
+	}
+}
+
 func (r *ReviewRepo) invalidateStoreReviewCache(ctx context.Context, storeID int64) error {
-	if r.data.rdb == nil || storeID <= 0 {
+	if storeID <= 0 {
+		return nil
+	}
+	if r.local != nil {
+		r.local.DeletePrefix(fmt.Sprintf("review:v2:store_id:%d:", storeID))
+	}
+	if r.data.rdb == nil {
 		return nil
 	}
 	if err := r.deleteStoreReviewCacheOnce(ctx, storeID); err != nil {
@@ -683,6 +930,41 @@ func (r *ReviewRepo) invalidateStoreReviewCache(ctx context.Context, storeID int
 	}
 	r.scheduleDelayedDelete(fmt.Sprintf("store review cache store_id=%d", storeID), func(c context.Context) error {
 		return r.deleteStoreReviewCacheOnce(c, storeID)
+	})
+	return nil
+}
+
+func (r *ReviewRepo) invalidatePublicReviewCache(ctx context.Context, row *model.ReviewInfo) error {
+	if row == nil {
+		return nil
+	}
+	if err := r.invalidatePublicReviewCacheByDimension(ctx, "store", row.StoreID); err != nil {
+		return err
+	}
+	if row.SpuID > 0 {
+		if err := r.invalidatePublicReviewCacheByDimension(ctx, "spu", row.SpuID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *ReviewRepo) invalidatePublicReviewCacheByDimension(ctx context.Context, dimension string, id int64) error {
+	if id <= 0 {
+		return nil
+	}
+	prefix := fmt.Sprintf("review:v1:public:%s:%d:", dimension, id)
+	if r.local != nil {
+		r.local.DeletePrefix(prefix)
+	}
+	if r.data.rdb == nil {
+		return nil
+	}
+	if err := r.deleteByPrefix(ctx, prefix); err != nil {
+		return err
+	}
+	r.scheduleDelayedDelete(fmt.Sprintf("public review cache %s=%d", dimension, id), func(c context.Context) error {
+		return r.deleteByPrefix(c, prefix)
 	})
 	return nil
 }
@@ -695,7 +977,11 @@ func (r *ReviewRepo) deleteGoodsScoreRankCacheOnce(ctx context.Context) error {
 }
 
 func (r *ReviewRepo) deleteStoreReviewCacheOnce(ctx context.Context, storeID int64) error {
-	pattern := fmt.Sprintf("review:v2:store_id:%d:*", storeID)
+	return r.deleteByPrefix(ctx, fmt.Sprintf("review:v2:store_id:%d:", storeID))
+}
+
+func (r *ReviewRepo) deleteByPrefix(ctx context.Context, prefix string) error {
+	pattern := prefix + "*"
 	var cursor uint64
 	for {
 		keys, nextCursor, err := r.data.rdb.Scan(ctx, cursor, pattern, 100).Result()

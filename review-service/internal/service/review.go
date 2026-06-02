@@ -292,6 +292,38 @@ func (s *ReviewService) ListReviewByStoreId(ctx context.Context, req *pb.ListRev
 	return &pb.ListReviewByStoreIdReply{List: list, Total: total}, nil
 }
 
+func (s *ReviewService) ListPublicReviewsByStoreId(ctx context.Context, storeID int64, page, pageSize int32) (*pb.ListReviewReply, error) {
+	reviews, total, err := s.uc.ListPublicReviewsByStoreId(ctx, &biz.PublicReviewListParams{
+		StoreID:  storeID,
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		return nil, err
+	}
+	list := make([]*pb.ReviewListItem, 0, len(reviews))
+	for _, r := range reviews {
+		list = append(list, reviewInfoToListItem(r))
+	}
+	return &pb.ListReviewReply{List: list, Total: total}, nil
+}
+
+func (s *ReviewService) ListPublicReviewsBySpuId(ctx context.Context, spuID int64, page, pageSize int32) (*pb.ListReviewReply, error) {
+	reviews, total, err := s.uc.ListPublicReviewsBySpuId(ctx, &biz.PublicReviewListParams{
+		SpuID:    spuID,
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		return nil, err
+	}
+	list := make([]*pb.ReviewListItem, 0, len(reviews))
+	for _, r := range reviews {
+		list = append(list, reviewInfoToListItem(r))
+	}
+	return &pb.ListReviewReply{List: list, Total: total}, nil
+}
+
 func (s *ReviewService) ListGoodsScoreRank(ctx context.Context, page, pageSize int32) ([]*GoodsScoreRankItem, int64, error) {
 	list, total, err := s.uc.ListGoodsScoreRank(ctx, &biz.GoodsScoreRankParams{
 		Page:     page,
