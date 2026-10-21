@@ -1,0 +1,16 @@
+{
+  "from": 0,
+  "size": 10,
+  "query": {
+    "bool": {
+      "should": [
+        { "term": { "store_id": { "value": 30001 } } },
+        { "term": { "store_id.keyword": { "value": "30001" } } }
+      ],
+      "minimum_should_match": 1
+    }
+  },
+  "sort": [
+    { "create_at": { "order": "desc" } }
+  ]
+}

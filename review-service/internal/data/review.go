@@ -22,12 +22,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// storeReviewListCache Redis 缓存一页列表（与 storeReviewsFromES 语义一致）
+// storeReviewListCache is the cached store review list payload.
 type storeReviewListCache struct {
-	Total   int64               `json:"total"`
-	Reviews []*model.ReviewInfo `json:"reviews"`
-	// EmptyDBChecked 为 true 表示 total==0 时已按 store_id 查过 MySQL，避免重复查库与旧空缓存误判。
-	EmptyDBChecked bool `json:"empty_db_checked,omitempty"`
+	Total          int64               `json:"total"`
+	Reviews        []*model.ReviewInfo `json:"reviews"`
+	EmptyDBChecked bool                `json:"empty_db_checked,omitempty"`
 }
 
 type goodsScoreRankMeta struct {
@@ -47,7 +46,7 @@ const (
 	goodsScoreRankMetaKey  = "review:v1:rank:goods:score:meta"
 	cacheDoubleDeleteDelay = 300 * time.Millisecond
 	cacheDeleteTimeout     = 3 * time.Second
-	// localCacheBackfillTTL Redis 命中后写入本地缓存的 TTL（短于 Redis，降低多实例间短暂不一致窗口）
+	// localCacheBackfillTTL is the TTL for local cache backfill after Redis hit.
 	localCacheBackfillTTL = 2 * time.Minute
 )
 
@@ -61,16 +60,16 @@ func NewReviewRepo(data *Data, logger log.Logger) biz.ReviewRepo {
 
 func (r *ReviewRepo) SaveReview(ctx context.Context, review *model.ReviewInfo) (*model.ReviewInfo, error) {
 	if err := r.data.q.ReviewInfo.WithContext(ctx).Create(review); err != nil {
-		return nil, wrapReviewDB("创建评价", err)
+		return nil, wrapReviewDB("create review", err)
 	}
 	if err := r.invalidateStoreReviewCache(ctx, review.StoreID); err != nil {
-		r.log.WithContext(ctx).Warnf("[data] 创建评价后清理店铺缓存失败 store_id=%d: %v", review.StoreID, err)
+		r.log.WithContext(ctx).Warnf("[data] 闁告帗绋戠紓鎾舵嫚閸曨亞骞嗛柛姘缁斿鎮堕崱妤冩殫闂佹崘娅ｇ槐锔锯偓娑櫭妵鎴犳嫻?store_id=%d: %v", review.StoreID, err)
 	}
 	if err := r.invalidatePublicReviewCache(ctx, review); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] invalidate public review cache after create failed review_id=%d: %v", review.ReviewID, err)
 	}
 	if err := r.invalidateGoodsScoreRankCache(ctx); err != nil {
-		r.log.WithContext(ctx).Warnf("[data] 创建评价后清理商品评分榜缓存失败: %v", err)
+		r.log.WithContext(ctx).Warnf("[data] 闁告帗绋戠紓鎾舵嫚閸曨亞骞嗛柛姘缁斿鎮堕崱妤佹珜闁告繀娴囬惁搴ㄥ礆閸℃﹩娓风紓鍌涙尭閻°劍寰勬潏顐バ? %v", err)
 	}
 	return review, nil
 }
@@ -78,7 +77,7 @@ func (r *ReviewRepo) SaveReview(ctx context.Context, review *model.ReviewInfo) (
 func (r *ReviewRepo) GetReviewByOrderID(ctx context.Context, orderID int64) ([]*model.ReviewInfo, error) {
 	reviews, err := r.data.q.ReviewInfo.WithContext(ctx).Where(r.data.q.ReviewInfo.OrderID.Eq(orderID)).Find()
 	if err != nil {
-		return nil, wrapReviewDB("按订单查询评价", err)
+		return nil, wrapReviewDB("query reviews by order", err)
 	}
 	return reviews, nil
 }
@@ -86,7 +85,7 @@ func (r *ReviewRepo) GetReviewByOrderID(ctx context.Context, orderID int64) ([]*
 func (r *ReviewRepo) GetByReviewID(ctx context.Context, reviewID int64) (*model.ReviewInfo, error) {
 	row, err := r.data.q.ReviewInfo.WithContext(ctx).Where(r.data.q.ReviewInfo.ReviewID.Eq(reviewID)).First()
 	if err != nil {
-		return nil, wrapReviewDB("查询评价", err)
+		return nil, wrapReviewDB("get review", err)
 	}
 	return row, nil
 }
@@ -96,7 +95,7 @@ func (r *ReviewRepo) ListByOrderID(ctx context.Context, p *biz.ReviewListOrderPa
 	offset := int((p.Page - 1) * p.PageSize)
 	list, total, err := q.Order(r.data.q.ReviewInfo.CreateAt.Desc()).FindByPage(offset, int(p.PageSize))
 	if err != nil {
-		return nil, 0, wrapReviewDB("分页查询评价", err)
+		return nil, 0, wrapReviewDB("list reviews by order", err)
 	}
 	return list, total, nil
 }
@@ -106,7 +105,7 @@ func (r *ReviewRepo) ListPending(ctx context.Context, p *biz.ReviewListPendingPa
 	offset := int((p.Page - 1) * p.PageSize)
 	list, total, err := q.Order(r.data.q.ReviewInfo.CreateAt.Desc()).FindByPage(offset, int(p.PageSize))
 	if err != nil {
-		return nil, 0, wrapReviewDB("查询待审核评价", err)
+		return nil, 0, wrapReviewDB("list pending reviews", err)
 	}
 	return list, total, nil
 }
@@ -116,7 +115,7 @@ func (r *ReviewRepo) ListPendingAppeals(ctx context.Context, p *biz.AppealListPe
 	offset := int((p.Page - 1) * p.PageSize)
 	list, total, err := q.Order(r.data.q.ReviewAppealInfo.CreateAt.Desc()).FindByPage(offset, int(p.PageSize))
 	if err != nil {
-		return nil, 0, wrapReviewDB("查询待审核申诉", err)
+		return nil, 0, wrapReviewDB("list pending appeals", err)
 	}
 	return list, total, nil
 }
@@ -141,7 +140,7 @@ func (r *ReviewRepo) ListGoodsScoreRank(ctx context.Context, p *biz.GoodsScoreRa
 
 	total, err := r.data.rdb.ZCard(ctx, goodsScoreRankZSetKey).Result()
 	if err != nil {
-		return nil, 0, fmt.Errorf("查询评分排行总数: %w", err)
+		return nil, 0, fmt.Errorf("闁哄被鍎撮妤冩嫚閸曨偄鐎婚柟鐑樺笩椤㈡垿骞€缂佹ɑ娈? %w", err)
 	}
 	if total == 0 {
 		return []*biz.GoodsScoreRankItem{}, 0, nil
@@ -149,7 +148,7 @@ func (r *ReviewRepo) ListGoodsScoreRank(ctx context.Context, p *biz.GoodsScoreRa
 	end := offset + limit - 1
 	zs, err := r.data.rdb.ZRevRangeWithScores(ctx, goodsScoreRankZSetKey, offset, end).Result()
 	if err != nil {
-		return nil, 0, fmt.Errorf("查询评分排行列表: %w", err)
+		return nil, 0, fmt.Errorf("闁哄被鍎撮妤冩嫚閸曨偄鐎婚柟鐑樺笩椤㈡垿宕氬Δ鍕┾偓? %w", err)
 	}
 	if len(zs) == 0 {
 		return []*biz.GoodsScoreRankItem{}, total, nil
@@ -166,7 +165,7 @@ func (r *ReviewRepo) ListGoodsScoreRank(ctx context.Context, p *biz.GoodsScoreRa
 	}
 	countVals, err := r.data.rdb.HMGet(ctx, goodsScoreRankMetaKey, fields...).Result()
 	if err != nil {
-		return nil, 0, fmt.Errorf("查询评分排行元数据: %w", err)
+		return nil, 0, fmt.Errorf("闁哄被鍎撮妤冩嫚閸曨偄鐎婚柟鐑樺笩椤㈡垿宕楅崘鈺傛闁? %w", err)
 	}
 	countBySpu := make(map[int64]int64, len(spuIDs))
 	for i := range countVals {
@@ -197,13 +196,13 @@ func (r *ReviewRepo) ListGoodsScoreRank(ctx context.Context, p *biz.GoodsScoreRa
 	return list, total, nil
 }
 
-// listByStoreIdFromDB 按店铺从 MySQL 分页查询（与 ListByOrderID 同构）。
+// listByStoreIdFromDB queries store reviews from MySQL.
 func (r *ReviewRepo) listByStoreIdFromDB(ctx context.Context, p *biz.ReviewListStoreParams) ([]*model.ReviewInfo, int64, error) {
 	q := r.data.q.ReviewInfo.WithContext(ctx).Where(r.data.q.ReviewInfo.StoreID.Eq(p.StoreID))
 	offset := int((p.Page - 1) * p.PageSize)
 	list, total, err := q.Order(r.data.q.ReviewInfo.CreateAt.Desc()).FindByPage(offset, int(p.PageSize))
 	if err != nil {
-		return nil, 0, wrapReviewDB("按店铺分页查询评价", err)
+		return nil, 0, wrapReviewDB("list store reviews", err)
 	}
 	return list, total, nil
 }
@@ -236,16 +235,16 @@ func (r *ReviewRepo) listPublicBySpuIdFromDB(ctx context.Context, p *biz.PublicR
 
 func (r *ReviewRepo) UpdateReview(ctx context.Context, row *model.ReviewInfo) error {
 	if err := r.data.q.ReviewInfo.WithContext(ctx).Save(row); err != nil {
-		return wrapReviewDB("更新评价", err)
+		return wrapReviewDB("update review", err)
 	}
 	if err := r.invalidateStoreReviewCache(ctx, row.StoreID); err != nil {
-		r.log.WithContext(ctx).Warnf("[data] 更新评价后清理店铺缓存失败 store_id=%d: %v", row.StoreID, err)
+		r.log.WithContext(ctx).Warnf("[data] 闁哄洤鐡ㄩ弻濠勬嫚閸曨亞骞嗛柛姘缁斿鎮堕崱妤冩殫闂佹崘娅ｇ槐锔锯偓娑櫭妵鎴犳嫻?store_id=%d: %v", row.StoreID, err)
 	}
 	if err := r.invalidatePublicReviewCache(ctx, row); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] invalidate public review cache after update failed review_id=%d: %v", row.ReviewID, err)
 	}
 	if err := r.invalidateGoodsScoreRankCache(ctx); err != nil {
-		r.log.WithContext(ctx).Warnf("[data] 更新评价后清理商品评分榜缓存失败: %v", err)
+		r.log.WithContext(ctx).Warnf("[data] 闁哄洤鐡ㄩ弻濠勬嫚閸曨亞骞嗛柛姘缁斿鎮堕崱妤佹珜闁告繀娴囬惁搴ㄥ礆閸℃﹩娓风紓鍌涙尭閻°劍寰勬潏顐バ? %v", err)
 	}
 	return nil
 }
@@ -253,38 +252,34 @@ func (r *ReviewRepo) UpdateReview(ctx context.Context, row *model.ReviewInfo) er
 func (r *ReviewRepo) DeleteByReviewID(ctx context.Context, reviewID int64) error {
 	info, err := r.data.q.ReviewInfo.WithContext(ctx).Where(r.data.q.ReviewInfo.ReviewID.Eq(reviewID)).First()
 	if err != nil {
-		return wrapReviewDB("删除前查询评价", err)
+		return wrapReviewDB("query review before delete", err)
 	}
 	if _, err := r.data.q.ReviewInfo.WithContext(ctx).Delete(info); err != nil {
-		return wrapReviewDB("删除评价", err)
+		return wrapReviewDB("闁告帞濞€濞呭海鎷犻崟顏嗗箚", err)
 	}
 	if err := r.invalidateStoreReviewCache(ctx, info.StoreID); err != nil {
-		r.log.WithContext(ctx).Warnf("[data] 删除评价后清理店铺缓存失败 store_id=%d: %v", info.StoreID, err)
+		r.log.WithContext(ctx).Warnf("[data] 闁告帞濞€濞呭海鎷犻崟顏嗗箚闁告艾瀛╃粩濠氭偠閸℃鏆楅梺鎹愭缁憋妇鈧稒锚閵囨垹鎷?store_id=%d: %v", info.StoreID, err)
 	}
 	if err := r.invalidatePublicReviewCache(ctx, info); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] invalidate public review cache after delete failed review_id=%d: %v", info.ReviewID, err)
 	}
 	if err := r.invalidateGoodsScoreRankCache(ctx); err != nil {
-		r.log.WithContext(ctx).Warnf("[data] 删除评价后清理商品评分榜缓存失败: %v", err)
+		r.log.WithContext(ctx).Warnf("[data] 闁告帞濞€濞呭海鎷犻崟顏嗗箚闁告艾瀛╃粩濠氭偠閸℃娅岄柛婵呮祰閻﹀酣宕氶崱姗嗘阜缂傚倹鎸搁悺銊﹀緞鏉堫偉袝: %v", err)
 	}
 	return nil
 }
 func (r *ReviewRepo) SaveReply(ctx context.Context, reply *model.ReviewReplyInfo) (*model.ReviewReplyInfo, error) {
-	//数据校验
-	//1. 已回复的评价不允许商家再次回复
 	review, err := r.data.q.ReviewInfo.WithContext(ctx).Where(r.data.q.ReviewInfo.ReviewID.Eq(reply.ReviewID)).First()
 	if err != nil {
-		return nil, errors.New("评价不存在")
+		return nil, errors.New("review not found")
 	}
 	if review.HasReply == 1 {
-		return nil, errors.New("已回复的评价不允许商家再次回复")
+		return nil, errors.New("review already replied")
 	}
-
-	//2. 水平越权校验 A-B 权限
 	if review.StoreID != reply.StoreID {
-		return nil, errors.New("无权回复他人评价")
+		return nil, errors.New("permission denied to reply review")
 	}
-	// 3. 同一事务：写入回复 + 将评价 has_reply 置为 1
+	// Save reply and mark review as replied in one transaction.
 	review.HasReply = 1
 	if err := r.data.q.Transaction(func(tx *query.Query) error {
 		if err := tx.ReviewReplyInfo.WithContext(ctx).Save(reply); err != nil {
@@ -295,10 +290,10 @@ func (r *ReviewRepo) SaveReply(ctx context.Context, reply *model.ReviewReplyInfo
 		}
 		return nil
 	}); err != nil {
-		return nil, wrapReviewDB("保存商家回复", err)
+		return nil, wrapReviewDB("save reply", err)
 	}
 	if err := r.invalidateStoreReviewCache(ctx, review.StoreID); err != nil {
-		r.log.WithContext(ctx).Warnf("[data] 商家回复后清理店铺缓存失败 store_id=%d: %v", review.StoreID, err)
+		r.log.WithContext(ctx).Warnf("[data] invalidate store review cache after reply failed store_id=%d: %v", review.StoreID, err)
 	}
 	if err := r.invalidatePublicReviewCache(ctx, review); err != nil {
 		r.log.WithContext(ctx).Warnf("[data] invalidate public review cache after reply failed review_id=%d: %v", review.ReviewID, err)
@@ -309,7 +304,7 @@ func (r *ReviewRepo) SaveReply(ctx context.Context, reply *model.ReviewReplyInfo
 func (r *ReviewRepo) GetByAppealID(ctx context.Context, appealID int64) (*model.ReviewAppealInfo, error) {
 	row, err := r.data.q.ReviewAppealInfo.WithContext(ctx).Where(r.data.q.ReviewAppealInfo.AppealID.Eq(appealID)).First()
 	if err != nil {
-		return nil, wrapReviewDB("查询申诉", err)
+		return nil, wrapReviewDB("get appeal", err)
 	}
 	return row, nil
 }
@@ -319,46 +314,43 @@ func (r *ReviewRepo) ListByUseId(ctx context.Context, p *biz.ReviewListUserParam
 	offset := int((p.Page - 1) * p.PageSize)
 	list, total, err := q.Order(r.data.q.ReviewInfo.CreateAt.Desc()).FindByPage(offset, int(p.PageSize))
 	if err != nil {
-		return nil, 0, wrapReviewDB("分页查询评价", err)
+		return nil, 0, wrapReviewDB("list reviews by user", err)
 	}
 	return list, total, nil
 }
 
-// SaveAppeal 同一评价同一店铺只允许一条申诉：
-//   - 不存在 → 新建
-//   - 已存在且待审核 → 更新内容（保留原 AppealID/CreateBy/CreateAt）
-//   - 已存在且已审核 → 拒绝再次申诉
+// SaveAppeal creates or updates a pending appeal.
 func (r *ReviewRepo) SaveAppeal(ctx context.Context, appeal *model.ReviewAppealInfo) (*model.ReviewAppealInfo, error) {
 	row, err := r.data.q.ReviewAppealInfo.WithContext(ctx).
 		Where(r.data.q.ReviewAppealInfo.ReviewID.Eq(appeal.ReviewID),
 			r.data.q.ReviewAppealInfo.StoreID.Eq(appeal.StoreID)).
 		First()
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, wrapReviewDB("查询申诉", err)
+		return nil, wrapReviewDB("get appeal", err)
 	}
 	if row != nil && err == nil {
 		if row.Status != biz.ReviewStatusPending {
-			return nil, errors.New("已存在审核过的申诉记录，不允许再次申诉")
+			return nil, errors.New("appeal already audited")
 		}
 		appeal.ID = row.ID
 		appeal.AppealID = row.AppealID
 		appeal.CreateBy = row.CreateBy
 		appeal.CreateAt = row.CreateAt
 		if err := r.data.q.ReviewAppealInfo.WithContext(ctx).Save(appeal); err != nil {
-			return nil, wrapReviewDB("更新申诉", err)
+			return nil, wrapReviewDB("update appeal", err)
 		}
 		return appeal, nil
 	}
 	if err := r.data.q.ReviewAppealInfo.WithContext(ctx).Create(appeal); err != nil {
-		return nil, wrapReviewDB("创建申诉", err)
+		return nil, wrapReviewDB("create appeal", err)
 	}
 	return appeal, nil
 }
 
-// UpdateAppeal 整行保存（运营审核结果回写）。
+// UpdateAppeal saves appeal audit result.
 func (r *ReviewRepo) UpdateAppeal(ctx context.Context, row *model.ReviewAppealInfo) error {
 	if err := r.data.q.ReviewAppealInfo.WithContext(ctx).Save(row); err != nil {
-		return wrapReviewDB("更新申诉", err)
+		return wrapReviewDB("update appeal", err)
 	}
 	return nil
 }
@@ -434,20 +426,20 @@ func (r *ReviewRepo) getData2(ctx context.Context, p *biz.ReviewListStoreParams)
 	}
 	var c storeReviewListCache
 	if err := json.Unmarshal(raw, &c); err != nil {
-		return nil, 0, fmt.Errorf("店铺评价缓存解码: %w", err)
+		return nil, 0, fmt.Errorf("閹煎瓨顨婇幗鐢垫嫚閸曨亞骞嗙紓鍌涙尭閻°劎鎲撮敐鍥╁灣: %w", err)
 	}
-	// 历史空缓存来自「仅查 ES 且无文档」；MySQL 已有评价时避免等 TTL 才生效。
+	// restored comment
 	if c.Total == 0 && len(c.Reviews) == 0 && !c.EmptyDBChecked {
 		dbList, dbTotal, err := r.listByStoreIdFromDB(ctx, p)
 		if err != nil {
 			return nil, 0, err
 		}
 		if dbTotal > 0 {
-			r.log.WithContext(ctx).Infof("[data] ListByStoreId: 缓存为空但 MySQL 有 %d 条，已回退数据库 store_id=%d", dbTotal, p.StoreID)
+			r.log.WithContext(ctx).Infof("[data] ListByStoreId: 缂傚倹鎸搁悺銊︾▔閾忓厜鏁勫ù?MySQL 闁?%d 闁哄妲勭槐婵嗩啅閹绘帗绀€闂侇偀鍋撻柡浣哄瀹撲焦鎯?store_id=%d", dbTotal, p.StoreID)
 			b, mErr := json.Marshal(&storeReviewListCache{Total: dbTotal, Reviews: dbList})
 			if mErr == nil {
 				if err := r.setCache(ctx, key, b, 10*time.Minute); err != nil {
-					r.log.WithContext(ctx).Warnf("[data] 回填店铺评价缓存: %v", err)
+					r.log.WithContext(ctx).Warnf("[data] 闁搞儳鍋涢敐鐐存償濡ゅ懏鎳欓悹鍥у閻滎垳绱撻幘宕囨憼: %v", err)
 				}
 			}
 			return dbList, dbTotal, nil
@@ -456,19 +448,19 @@ func (r *ReviewRepo) getData2(ctx context.Context, p *biz.ReviewListStoreParams)
 	return c.Reviews, c.Total, nil
 }
 
-// storeReviewsFromES 直查 ES（与缓存中保存的结构一致）
+// storeReviewsFromES 闁烩晛鐡ㄩ悡?ES闁挎稑鐗呯粭宀€绱撻幘宕囨憼濞戞搩鍘虹换姘扁偓娑欘焽濞堟垹绱掗幘瀵糕偓顖涚▔閳ь剟鎳涙潏鍓х
 func (r *ReviewRepo) storeReviewsFromES(ctx context.Context, p *biz.ReviewListStoreParams) ([]*model.ReviewInfo, int64, error) {
 	if r.data.es == nil {
-		r.log.WithContext(ctx).Infof("[data] ListByStoreId: elasticsearch 未初始化，回退 MySQL store_id=%d", p.StoreID)
+		r.log.WithContext(ctx).Infof("[data] ListByStoreId: elasticsearch 闁哄牜浜滈崹鍨叏鐎ｎ亜顕ч柨娑樿嫰濞叉牠鏌呴埀?MySQL store_id=%d", p.StoreID)
 		return r.listByStoreIdFromDB(ctx, p)
 	}
 	from := int((p.Page - 1) * p.PageSize)
 	size := int(p.PageSize)
 	desc := sortorder.Desc
-	// Canal 同步多为字符串，动态映射常见为 text + .keyword；对 text 做 sort 会导致分片失败。
+	// sort by create_at date field
 	sortOpts := types.SortOptions{
 		SortOptions: map[string]types.FieldSort{
-			"create_at.keyword": {Order: &desc},
+			"create_at": {Order: &desc},
 		},
 	}
 	resp, err := r.data.es.Search().
@@ -498,8 +490,8 @@ func (r *ReviewRepo) storeReviewsFromES(ctx context.Context, p *biz.ReviewListSt
 		}).
 		Do(ctx)
 	if err != nil {
-		r.log.WithContext(ctx).Errorf("[data] ListByStoreId ES 查询失败 store_id=%d from=%d size=%d: %v", p.StoreID, from, size, err)
-		return nil, 0, fmt.Errorf("按店铺查询评价(ES): %w", err)
+		r.log.WithContext(ctx).Errorf("[data] ListByStoreId ES 闁哄被鍎撮妤佸緞鏉堫偉袝 store_id=%d from=%d size=%d: %v", p.StoreID, from, size, err)
+		return nil, 0, fmt.Errorf("闁圭顦花鐢告煣閻戞鍙€閻犲洢鍨奸惁搴㈢?ES): %w", err)
 	}
 	var total int64
 	if resp.Hits.Total != nil {
@@ -509,20 +501,20 @@ func (r *ReviewRepo) storeReviewsFromES(ctx context.Context, p *biz.ReviewListSt
 	for i := range resp.Hits.Hits {
 		row, err := reviewInfoFromESSource(resp.Hits.Hits[i].Source_)
 		if err != nil {
-			r.log.WithContext(ctx).Warnf("跳过无法解析的 ES 文档: %v", err)
+			r.log.WithContext(ctx).Warnf("閻犲搫鐤囩换鍐籍閻樺磭銆婇悷娆欑稻閻庝粙鎯?ES 闁哄倸娲﹂妴? %v", err)
 			continue
 		}
 		out = append(out, row)
 	}
 	r.log.WithContext(ctx).Debugf("[data] ListByStoreId store_id=%d es_total=%d parsed=%d", p.StoreID, total, len(out))
-	// ES 无文档常见于未跑 Kafka→review-job 同步；此时 MySQL 已有评价，回退数据库以免商家端空白。
+	// restored comment
 	if total == 0 {
 		dbList, dbTotal, err := r.listByStoreIdFromDB(ctx, p)
 		if err != nil {
 			return nil, 0, err
 		}
 		if dbTotal > 0 {
-			r.log.WithContext(ctx).Infof("[data] ListByStoreId: ES 无命中但 MySQL 有 %d 条，已回退数据库 store_id=%d", dbTotal, p.StoreID)
+			r.log.WithContext(ctx).Infof("[data] ListByStoreId: ES 闁哄啰濮撮幊鈩冪▔椤撴繄绋?MySQL 闁?%d 闁哄妲勭槐婵嗩啅閹绘帗绀€闂侇偀鍋撻柡浣哄瀹撲焦鎯?store_id=%d", dbTotal, p.StoreID)
 			return dbList, dbTotal, nil
 		}
 	}
@@ -542,7 +534,7 @@ func (r *ReviewRepo) publicReviewsFromES(ctx context.Context, dimension string, 
 	}
 	sortOpts := types.SortOptions{
 		SortOptions: map[string]types.FieldSort{
-			"create_at.keyword": {Order: &desc},
+			"create_at": {Order: &desc},
 		},
 	}
 	resp, err := r.data.es.Search().
@@ -732,14 +724,14 @@ func (r *ReviewRepo) listGoodsScoreRankFromDB(ctx context.Context, offset, limit
 		Offset(int(offset)).
 		Limit(int(limit)).
 		Scan(&rows).Error; err != nil {
-		return nil, 0, wrapReviewDB("查询商品评分排行", err)
+		return nil, 0, wrapReviewDB("闁哄被鍎撮妤呭疮閸℃鎯傞悹鍥у閸ㄥ酣骞掗幒鏇ㄦ斀", err)
 	}
 	var total int64
 	if err := db.Table(model.TableNameReviewInfo).
 		Where("status = ? AND spu_id > 0", biz.ReviewStatusApproved).
 		Distinct("spu_id").
 		Count(&total).Error; err != nil {
-		return nil, 0, wrapReviewDB("统计商品评分排行", err)
+		return nil, 0, wrapReviewDB("缂備胶鍠曢鎼佸疮閸℃鎯傞悹鍥у閸ㄥ酣骞掗幒鏇ㄦ斀", err)
 	}
 	list := make([]*biz.GoodsScoreRankItem, 0, len(rows))
 	for i := range rows {
@@ -771,7 +763,7 @@ func (r *ReviewRepo) ensureGoodsScoreRankCache(ctx context.Context) error {
 		Group("spu_id").
 		Order("avg_score DESC, review_count DESC, spu_id ASC").
 		Scan(&rows).Error; err != nil {
-		return wrapReviewDB("重建商品评分排行缓存", err)
+		return wrapReviewDB("rebuild goods score rank cache", err)
 	}
 	pipe := r.data.rdb.Pipeline()
 	pipe.Del(ctx, goodsScoreRankZSetKey, goodsScoreRankMetaKey)
@@ -784,7 +776,7 @@ func (r *ReviewRepo) ensureGoodsScoreRankCache(ctx context.Context) error {
 		pipe.HSet(ctx, goodsScoreRankMetaKey, fmt.Sprintf("spu:%d:cnt", meta.SpuID), meta.ReviewCount)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("写入商品评分排行缓存: %w", err)
+		return fmt.Errorf("闁告劖鐟ラ崣鍡涘疮閸℃鎯傞悹鍥у閸ㄥ酣骞掗幒鏇ㄦ斀缂傚倹鎸搁悺? %w", err)
 	}
 	return nil
 }
@@ -804,7 +796,7 @@ func (r *ReviewRepo) invalidateGoodsScoreRankCache(ctx context.Context) error {
 
 var g singleflight.Group
 
-// 带缓存版本的查询：缓存值为 JSON(storeReviewListCache)；未命中时与 storeReviewsFromES 一致
+// getDataBySingleflight queries store review list with cache.
 func (r *ReviewRepo) getDataBySingleflight(ctx context.Context, key string, p *biz.ReviewListStoreParams) ([]byte, error) {
 	v, err, shared := g.Do(key, func() (any, error) {
 		data, err := r.getDataFromCahe(ctx, key)
@@ -839,7 +831,7 @@ func (r *ReviewRepo) getDataBySingleflight(ctx context.Context, key string, p *b
 	return v.([]byte), nil
 }
 
-// 读缓存：L1 本地 map → L2 Redis
+// 閻犲洩宕电槐锔锯偓娑欙公缁辩檽1 闁哄牜鍓欏﹢?map 闁?L2 Redis
 func (r *ReviewRepo) getDataBySingleflightForPublic(ctx context.Context, key string, dimension string, id int64, p *biz.PublicReviewListParams) ([]byte, error) {
 	v, err, shared := g.Do(key, func() (any, error) {
 		data, err := r.getDataFromCahe(ctx, key)
@@ -892,7 +884,7 @@ func (r *ReviewRepo) getDataFromCahe(ctx context.Context, key string) (any, erro
 	return b, err
 }
 
-// 写缓存：同时写本地与 Redis
+// 闁告劖鐟х槐锔锯偓娑欙公缁变即宕ョ仦鐐槯闁告劖鐟﹀﹢浼村捶妫颁胶鐟?Redis
 func (r *ReviewRepo) setCache(ctx context.Context, key string, data any, ttl time.Duration) error {
 	r.log.WithContext(ctx).Debugf("[data] setCache: key=%s ttl=%s", key, ttl)
 	if raw, ok := cacheBytes(data); ok && r.local != nil {
@@ -971,7 +963,7 @@ func (r *ReviewRepo) invalidatePublicReviewCacheByDimension(ctx context.Context,
 
 func (r *ReviewRepo) deleteGoodsScoreRankCacheOnce(ctx context.Context) error {
 	if err := r.data.rdb.Del(ctx, goodsScoreRankZSetKey, goodsScoreRankMetaKey).Err(); err != nil {
-		return fmt.Errorf("清理商品评分排行缓存: %w", err)
+		return fmt.Errorf("婵炴挸鎳愰幃濠囧疮閸℃鎯傞悹鍥у閸ㄥ酣骞掗幒鏇ㄦ斀缂傚倹鎸搁悺? %w", err)
 	}
 	return nil
 }
@@ -1007,7 +999,11 @@ func (r *ReviewRepo) scheduleDelayedDelete(scene string, deleteFn func(context.C
 		ctx, cancel := context.WithTimeout(context.Background(), cacheDeleteTimeout)
 		defer cancel()
 		if err := deleteFn(ctx); err != nil {
-			r.log.WithContext(ctx).Warnf("[data] 延迟双删失败 scene=%s err=%v", scene, err)
+			r.log.WithContext(ctx).Warnf("[data] 鐎点倖鍎肩换婊堝矗鐏炶棄鐏╁鎯扮簿鐟?scene=%s err=%v", scene, err)
 		}
 	}()
 }
+
+// getDataBySingleflight queries and caches store review list.
+
+// SaveAppeal creates or updates a pending appeal.

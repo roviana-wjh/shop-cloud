@@ -1,0 +1,39 @@
+\documentclass[UTF8,10.5pt,a4paper]{ctexart}
+\usepackage[margin=1.55cm,top=1.35cm,bottom=1.35cm]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{hyperref}
+\usepackage{tabularx}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2pt}
+\pagestyle{empty}
+\definecolor{accent}{RGB}{25,55,90}
+\titleformat{\section}{\large\bfseries\color{accent}}{}{0pt}{}[\titlerule]
+\setlist[enumerate]{leftmargin=1.8em,itemsep=2pt,topsep=2pt,parsep=0pt}
+\hypersetup{colorlinks=true,urlcolor=accent}
+\begin{document}
+
+% 简历项目经历模块；姓名、联系方式等可按完整简历补充。
+\section*{项目经历}
+
+\begin{tabularx}{\linewidth}{@{}Xr@{}}
+\textbf{\large 电商评价微服务与 Saga 交易链路} & \textbf{2026.02 -- 至今}\\
+\end{tabularx}
+
+\textbf{技术栈：} Go、Kratos、HTTP/gRPC、MySQL、Redis、Elasticsearch、Kafka、Canal、Consul、Docker Compose
+
+\textbf{项目介绍：} 面向电商评价业务构建微服务系统，支持评价发布、商家回复、运营审核、公开评价检索与商品评分榜；在现有项目旁扩展本地多进程的商品下单支付链路，用于实践编排式 Saga 与失败补偿。
+
+\begin{enumerate}
+  \item 基于 Kratos 按职责拆分评价服务、商家服务和运营服务，使用 Protocol Buffers 定义 HTTP/gRPC 接口；商家回复和运营审核通过 gRPC 调用核心评价服务，使用 Consul 完成服务注册与发现。
+  \item 设计评价审核与申诉状态流转，覆盖消费者发布、商家回复、运营审核等核心场景；在业务层校验评价归属及状态，数据层通过 MySQL 持久化评价、回复与申诉记录。
+  \item 针对店铺及公开评价查询构建 Elasticsearch 检索路径，并结合本地缓存、Redis 与 Singleflight 合并并发回源；写操作后按业务维度失效缓存，降低重复查询压力。
+  \item 基于 Canal 监听 MySQL Binlog 并投递 Kafka，由独立 Go 消费进程按 INSERT、UPDATE、DELETE 事件更新 Elasticsearch 评价索引，实现评价数据的异步检索同步。
+  \item 在现有项目之外实现商品、库存、订单、支付、Saga 编排器五个独立进程，以 HTTP/JSON 协作；串联商品校验、库存预留、模拟支付及订单状态更新，Saga 步骤持久化到各服务本地数据文件。
+  \item 实现商品下单支付的 \textbf{Saga 编排链路}：订单创建后依次完成商品校验、库存预留和模拟支付；支付成功时确认库存并更新订单状态，支付失败时释放库存预留并取消订单，通过集成测试验证成功流程与失败补偿。
+\end{enumerate}
+
+\textbf{项目说明：} Saga 链路当前为本地学习演示，使用 JSON 文件保存状态，尚未实现可靠消息 Outbox、后台自动恢复/重试、支付超时关单及 Kubernetes 部署。若这些能力尚未在你的原评价项目中实际落地，请删除第 4 条中对应的技术描述，避免面试时被追问实现细节。
+
+\end{document}

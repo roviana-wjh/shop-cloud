@@ -1,0 +1,30 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "id": { "type": "long" },
+      "review_id": { "type": "long", "fields": { "keyword": { "type": "keyword" } } },
+      "store_id": { "type": "long", "fields": { "keyword": { "type": "keyword" } } },
+      "spu_id": { "type": "long", "fields": { "keyword": { "type": "keyword" } } },
+      "user_id": { "type": "long", "fields": { "keyword": { "type": "keyword" } } },
+      "order_id": { "type": "long", "fields": { "keyword": { "type": "keyword" } } },
+      "sku_id": { "type": "long", "fields": { "keyword": { "type": "keyword" } } },
+      "status": { "type": "integer" },
+      "score": { "type": "integer" },
+      "service_score": { "type": "integer" },
+      "express_score": { "type": "integer" },
+      "has_media": { "type": "integer" },
+      "anonymous": { "type": "integer" },
+      "is_default": { "type": "integer" },
+      "has_reply": { "type": "integer" },
+      "version": { "type": "integer" },
+      "content": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } },
+      "create_at": { "type": "date" },
+      "update_at": { "type": "date" },
+      "delete_at": { "type": "date" }
+    }
+  }
+}

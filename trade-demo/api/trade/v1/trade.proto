@@ -1,0 +1,51 @@
+syntax = "proto3";
+package trade.v1;
+option go_package = "trade-demo/api/trade/v1;v1";
+import "google/api/annotations.proto";
+
+message Empty {}
+message IDRequest { string id = 1; }
+message Product { string id = 1; string name = 2; int64 price_fen = 3; bool active = 4; }
+message ProductList { repeated Product items = 1; }
+message OrderItem { string product_id = 1; string product_name = 2; int64 unit_price_fen = 3; int64 quantity = 4; }
+message Order { string id = 1; string user_id = 2; repeated OrderItem items = 3; int64 amount_fen = 4; string status = 5; string payment_id = 6; string saga_id = 7; string created_at = 8; }
+message Payment { string id = 1; string order_id = 2; int64 amount_fen = 3; string status = 4; string created_at = 5; }
+message Reservation { string id = 1; string order_id = 2; string product_id = 3; int64 quantity = 4; string status = 5; }
+message StockReply { map<string,int64> stock = 1; }
+message Step { string name = 1; string status = 2; string detail = 3; }
+message Saga { string id = 1; string order_id = 2; string payment_id = 3; string status = 4; string current_step = 5; repeated Step steps = 6; string updated_at = 7; }
+message CreateOrderRequest { string user_id = 1; string product_id = 2; int64 quantity = 3; }
+message CreateOrderReply { Order order = 1; Saga saga = 2; }
+message ReserveStockRequest { string id = 1; string order_id = 2; string product_id = 3; int64 quantity = 4; }
+message CreatePaymentRequest { string order_id = 1; int64 amount_fen = 2; }
+message SimulatePaymentRequest { string id = 1; string result = 2; }
+message StartSagaRequest { string order_id = 1; }
+message PaymentResultRequest { string payment_id = 1; string order_id = 2; string result = 3; }
+
+service ProductService {
+  rpc ListProducts(Empty) returns (ProductList) { option (google.api.http) = {get:"/products"}; }
+  rpc GetProduct(IDRequest) returns (Product) { option (google.api.http) = {get:"/products/{id}"}; }
+}
+service InventoryService {
+  rpc GetStock(Empty) returns (StockReply) { option (google.api.http) = {get:"/inventory"}; }
+  rpc ReserveStock(ReserveStockRequest) returns (Reservation);
+  rpc ConfirmReservation(IDRequest) returns (Reservation);
+  rpc ReleaseReservation(IDRequest) returns (Reservation);
+}
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderReply) { option (google.api.http) = {post:"/orders" body:"*"}; }
+  rpc GetOrder(IDRequest) returns (Order) { option (google.api.http) = {get:"/orders/{id}"}; }
+  rpc MarkOrderPaid(IDRequest) returns (Order);
+  rpc CancelOrder(IDRequest) returns (Order);
+}
+service PaymentService {
+  rpc CreatePayment(CreatePaymentRequest) returns (Payment);
+  rpc ClosePayment(IDRequest) returns (Payment);
+  rpc GetPayment(IDRequest) returns (Payment) { option (google.api.http) = {get:"/payments/{id}"}; }
+  rpc SimulatePayment(SimulatePaymentRequest) returns (Payment) { option (google.api.http) = {post:"/payments/{id}/simulate" body:"*"}; }
+}
+service SagaService {
+  rpc StartSaga(StartSagaRequest) returns (Saga);
+  rpc NotifyPaymentResult(PaymentResultRequest) returns (Saga);
+  rpc GetSaga(IDRequest) returns (Saga) { option (google.api.http) = {get:"/sagas/{id}"}; }
+}
